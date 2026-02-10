@@ -23,6 +23,9 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Data (persisted state)
+data/
+
 # Logs
 logs/
 *.log

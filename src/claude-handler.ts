@@ -1,15 +1,19 @@
-import { query, type SDKMessage } from '@anthropic-ai/claude-code';
-import { ConversationSession } from './types';
-import { Logger } from './logger';
-import { McpManager, McpServerConfig } from './mcp-manager';
+import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { fileURLToPath } from 'url';
+import path from 'path';
+import { ConversationSession } from './types.js';
+import { Logger } from './logger.js';
+import { McpManager, McpServerConfig } from './mcp-manager.js';
 
 export class ClaudeHandler {
   private sessions: Map<string, ConversationSession> = new Map();
   private logger = new Logger('ClaudeHandler');
   private mcpManager: McpManager;
+  private permissionBridgePort: number;
 
-  constructor(mcpManager: McpManager) {
+  constructor(mcpManager: McpManager, permissionBridgePort: number = 0) {
     this.mcpManager = mcpManager;
+    this.permissionBridgePort = permissionBridgePort;
   }
 
   getSessionKey(userId: string, channelId: string, threadTs?: string): string {
@@ -62,9 +66,9 @@ export class ClaudeHandler {
       const permissionServer = {
         'permission-prompt': {
           command: 'npx',
-          args: ['tsx', '/Users/marcelpociot/Experiments/claude-code-slack/src/permission-mcp-server.ts'],
+          args: ['tsx', path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'permission-mcp-server.ts')],
           env: {
-            SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
+            PERMISSION_BRIDGE_PORT: String(this.permissionBridgePort),
             SLACK_CONTEXT: JSON.stringify(slackContext)
           }
         }
@@ -106,10 +110,11 @@ export class ClaudeHandler {
 
     this.logger.debug('Claude query options', options);
 
+    options.abortController = abortController || new AbortController();
+
     try {
       for await (const message of query({
         prompt,
-        abortController: abortController || new AbortController(),
         options,
       })) {
         if (message.type === 'system' && message.subtype === 'init') {

@@ -1,9 +1,10 @@
 import { App } from '@slack/bolt';
-import { config, validateConfig } from './config';
-import { ClaudeHandler } from './claude-handler';
-import { SlackHandler } from './slack-handler';
-import { McpManager } from './mcp-manager';
-import { Logger } from './logger';
+import { config, validateConfig } from './config.js';
+import { ClaudeHandler } from './claude-handler.js';
+import { SlackHandler } from './slack-handler.js';
+import { McpManager } from './mcp-manager.js';
+import { PermissionHandler } from './permission-handler.js';
+import { Logger } from './logger.js';
 
 const logger = new Logger('Main');
 
@@ -29,10 +30,14 @@ async function start() {
     // Initialize MCP manager
     const mcpManager = new McpManager();
     const mcpConfig = mcpManager.loadConfiguration();
-    
+
+    // Initialize permission handler (HTTP bridge for child MCP processes)
+    const permissionHandler = new PermissionHandler(app);
+    const permissionBridgePort = await permissionHandler.start();
+
     // Initialize handlers
-    const claudeHandler = new ClaudeHandler(mcpManager);
-    const slackHandler = new SlackHandler(app, claudeHandler, mcpManager);
+    const claudeHandler = new ClaudeHandler(mcpManager, permissionBridgePort);
+    const slackHandler = new SlackHandler(app, claudeHandler, mcpManager, permissionHandler);
 
     // Setup event handlers
     slackHandler.setupEventHandlers();
@@ -46,6 +51,8 @@ async function start() {
       usingAnthropicAPI: !config.claude.useBedrock && !config.claude.useVertex,
       debugMode: config.debug,
       baseDirectory: config.baseDirectory || 'not set',
+      maxConcurrency: config.maxConcurrency,
+      permissionBridgePort,
       mcpServers: mcpConfig ? Object.keys(mcpConfig.mcpServers).length : 0,
       mcpServerNames: mcpConfig ? Object.keys(mcpConfig.mcpServers) : [],
     });

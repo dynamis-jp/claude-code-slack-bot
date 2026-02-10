@@ -16,6 +16,8 @@ export const config = {
     useVertex: process.env.CLAUDE_CODE_USE_VERTEX === '1',
   },
   baseDirectory: process.env.BASE_DIRECTORY || '',
+  dataDirectory: process.env.DATA_DIRECTORY || './data',
+  maxConcurrency: parseInt(process.env.MAX_CONCURRENT_QUERIES || '5', 10),
   debug: process.env.DEBUG === 'true' || process.env.NODE_ENV === 'development',
 };
 

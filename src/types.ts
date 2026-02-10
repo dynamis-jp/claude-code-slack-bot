@@ -15,3 +15,10 @@ export interface WorkingDirectoryConfig {
   directory: string;
   setAt: Date;
 }
+
+export interface PersistedWorkingDirectoryConfig {
+  channelId: string;
+  userId?: string;
+  directory: string;
+  setAt: string; // ISO 8601
+}

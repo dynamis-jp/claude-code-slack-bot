@@ -1,9 +1,8 @@
-import fetch from 'node-fetch';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { Logger } from './logger';
-import { config } from './config';
+import { Logger } from './logger.js';
+import { config } from './config.js';
 
 export interface ProcessedFile {
   path: string;
@@ -55,7 +54,7 @@ export class FileHandler {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const buffer = await response.buffer();
+      const buffer = Buffer.from(await response.arrayBuffer());
       const tempDir = os.tmpdir();
       const tempPath = path.join(tempDir, `slack-file-${Date.now()}-${file.name}`);
       

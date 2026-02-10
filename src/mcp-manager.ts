@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Logger } from './logger';
+import { Logger } from './logger.js';
 
 export type McpStdioServerConfig = {
   type?: 'stdio'; // Optional for backwards compatibility
@@ -127,11 +127,11 @@ export class McpManager {
       return 'No MCP servers configured.';
     }
 
-    let info = '🔧 **MCP Servers Configured:**\n\n';
-    
+    let info = '🔧 *MCP Servers Configured:*\n\n';
+
     for (const [serverName, serverConfig] of Object.entries(config.mcpServers)) {
       const type = serverConfig.type || 'stdio';
-      info += `• **${serverName}** (${type})\n`;
+      info += `• *${serverName}* (${type})\n`;
       
       if (type === 'stdio') {
         const stdioConfig = serverConfig as McpStdioServerConfig;
