@@ -1,9 +1,10 @@
+import * as os from 'os';
 import { App } from '@slack/bolt';
 import { ClaudeHandler } from './claude-handler.js';
 import { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { Logger } from './logger.js';
 import { WorkingDirectoryManager } from './working-directory-manager.js';
-import { FileHandler, ProcessedFile } from './file-handler.js';
+import { FileHandler, ProcessedFile, FileProcessingDiagnostic } from './file-handler.js';
 import { TodoManager, Todo } from './todo-manager.js';
 import { McpManager } from './mcp-manager.js';
 import { PermissionHandler } from './permission-handler.js';
@@ -124,13 +125,35 @@ export class SlackHandler {
     // Process any attached files
     let processedFiles: ProcessedFile[] = [];
     if (files && files.length > 0) {
-      this.logger.info('Processing uploaded files', { count: files.length });
-      processedFiles = await this.fileHandler.downloadAndProcessFiles(files);
+      this.logger.info('Processing uploaded files', {
+        count: files.length,
+        fileDetails: files.map(f => ({
+          id: f.id,
+          name: f.name,
+          mimetype: f.mimetype,
+          filetype: f.filetype,
+          size: f.size,
+          hasUrlPrivate: !!f.url_private,
+          hasUrlPrivateDownload: !!f.url_private_download,
+        })),
+      });
+
+      const { processed, diagnostics } = await this.fileHandler.downloadAndProcessFiles(files);
+      processedFiles = processed;
 
       if (processedFiles.length > 0) {
         const fileMsg = `📎 Processing ${processedFiles.length} file(s): ${processedFiles.map(f => f.name).join(', ')}`;
         await say({
           ...this.buildMrkdwnMessage(fileMsg),
+          thread_ts: thread_ts || ts,
+        });
+      }
+
+      // Show diagnostics in Slack if there were issues
+      const diagMsg = this.fileHandler.formatDiagnostics(diagnostics);
+      if (diagMsg) {
+        await say({
+          ...this.buildMrkdwnMessage(diagMsg),
           thread_ts: thread_ts || ts,
         });
       }
@@ -267,6 +290,12 @@ export class SlackHandler {
       return;
     }
 
+    // Check if this is a debug command
+    if (text && this.isDebugCommand(text)) {
+      await this.handleDebugCommand(text, channel, thread_ts || ts, say);
+      return;
+    }
+
     // Check if we have a working directory set
     const isDM = channel.startsWith('D');
     const workingDirectory = this.workingDirManager.getWorkingDirectory(
@@ -396,6 +425,11 @@ export class SlackHandler {
     let statusMessageTs: string | undefined;
 
     try {
+      // Relocate uploaded files into the working directory so the SDK can access them
+      if (processedFiles.length > 0 && workingDirectory) {
+        this.fileHandler.relocateToWorkingDirectory(processedFiles, workingDirectory);
+      }
+
       // Prepare the prompt with file attachments
       const finalPrompt = processedFiles.length > 0
         ? await this.fileHandler.formatFilePrompt(processedFiles, text || '')
@@ -422,7 +456,8 @@ export class SlackHandler {
       const slackContext = {
         channel,
         threadTs: thread_ts,
-        user
+        user,
+        workingDirectory,
       };
 
       for await (const message of this.claudeHandler.streamQuery(finalPrompt, session, abortController, workingDirectory!, slackContext)) {
@@ -805,6 +840,105 @@ export class SlackHandler {
     await this.updateMessageReaction(sessionKey, emoji);
   }
 
+  private isDebugCommand(text: string): boolean {
+    return /^debug(\s+.*)?$/i.test(text.trim());
+  }
+
+  private async handleDebugCommand(text: string, channel: string, threadTs: string, say: any): Promise<void> {
+    const subCommand = text.trim().replace(/^debug\s*/i, '').trim().toLowerCase();
+
+    let msg = '';
+
+    if (subCommand === 'files' || subCommand === 'file') {
+      msg = this.getFileDebugInfo();
+    } else if (subCommand === 'config' || subCommand === 'env') {
+      msg = this.getConfigDebugInfo();
+    } else if (subCommand === 'sessions') {
+      msg = this.getSessionDebugInfo();
+    } else if (subCommand === 'permissions' || subCommand === 'perms') {
+      msg = this.getPermissionDebugInfo();
+    } else if (subCommand === 'permissions reset' || subCommand === 'perms reset') {
+      this.permissionHandler.clearApprovals();
+      msg = '✅ All remembered tool approvals have been cleared. Tools will require permission again on next use.';
+    } else {
+      // Show all debug info
+      msg = '*🔍 Debug Information*\n\n';
+      msg += this.getConfigDebugInfo();
+      msg += '\n\n';
+      msg += this.getSessionDebugInfo();
+      msg += '\n\n';
+      msg += this.getPermissionDebugInfo();
+      msg += '\n\n';
+      msg += this.getFileDebugInfo();
+      msg += '\n\n';
+      msg += '*Available debug subcommands:*\n';
+      msg += '• `debug` — Show all debug info\n';
+      msg += '• `debug config` — Show configuration\n';
+      msg += '• `debug sessions` — Show active sessions\n';
+      msg += '• `debug permissions` — Show remembered approvals\n';
+      msg += '• `debug permissions reset` — Clear all remembered approvals\n';
+      msg += '• `debug files` — Show file handling info\n';
+    }
+
+    await say({
+      ...this.buildMrkdwnMessage(msg),
+      thread_ts: threadTs,
+    });
+  }
+
+  private getConfigDebugInfo(): string {
+    let msg = '*⚙️ Configuration:*\n';
+    msg += `• Log Level: \`${config.logLevel}\`\n`;
+    msg += `• Debug Mode: \`${config.debug}\`\n`;
+    msg += `• Log File: \`${config.logFile || '(none)'}\`\n`;
+    msg += `• Base Directory: \`${config.baseDirectory || '(not set)'}\`\n`;
+    msg += `• Max Concurrency: \`${config.maxConcurrency}\`\n`;
+    msg += `• Bot Token: \`${config.slack.botToken ? config.slack.botToken.substring(0, 10) + '...' : '(missing)'}\`\n`;
+    msg += `• Platform: \`${process.platform}\`\n`;
+    msg += `• Node.js: \`${process.version}\`\n`;
+    msg += `• Uptime: \`${Math.floor(process.uptime())}s\`\n`;
+    msg += `• Memory: \`${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)}MB\`\n`;
+    return msg;
+  }
+
+  private getSessionDebugInfo(): string {
+    let msg = '*📡 Sessions:*\n';
+    msg += `• Active sessions: \`${this.activeSessions.size}\`\n`;
+    msg += `• Active concurrency: \`${this.activeConcurrency} / ${this.maxConcurrency}\`\n`;
+    msg += `• Queued sessions: \`${this.sessionQueues.size}\`\n`;
+    const totalQueued = Array.from(this.sessionQueues.values()).reduce((sum, q) => sum + q.length, 0);
+    msg += `• Total queued messages: \`${totalQueued}\`\n`;
+    msg += `• Active controllers: \`${this.activeControllers.size}\`\n`;
+    msg += `• Todo messages tracked: \`${this.todoMessages.size}\`\n`;
+    return msg;
+  }
+
+  private getPermissionDebugInfo(): string {
+    const approvals = this.permissionHandler.getApprovalSummary();
+    let msg = '*🔐 Remembered Approvals:*\n';
+    if (approvals.length === 0) {
+      msg += '_No tools have been approved yet. Each tool will prompt for permission on first use per directory._\n';
+    } else {
+      for (const { directory, tools } of approvals) {
+        msg += `• \`${directory}\`: ${tools.map(t => `\`${t}\``).join(', ')}\n`;
+      }
+      msg += '\n_Use `debug permissions reset` to clear all approvals._\n';
+    }
+    return msg;
+  }
+
+  private getFileDebugInfo(): string {
+    let msg = '*📎 File Handling:*\n';
+    msg += `• Supported types:\n`;
+    for (const type of this.fileHandler.getSupportedFileTypes()) {
+      msg += `  - ${type}\n`;
+    }
+    msg += `• Temp directory: \`${os.tmpdir()}\`\n`;
+    msg += `• Max file size: \`50MB\`\n`;
+    msg += '\n_Upload a file with your message to test file processing. Diagnostics will be shown if any issues occur._\n';
+    return msg;
+  }
+
   private isMcpInfoCommand(text: string): boolean {
     return /^(mcp|servers?)(\s+(info|list|status))?(\?)?$/i.test(text.trim());
   }
@@ -861,42 +995,120 @@ export class SlackHandler {
   }
 
   private formatMessage(text: string, isFinal: boolean): string {
-    let formatted = text
-      .replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
-        return '```' + code + '```';
-      })
-      .replace(/`([^`]+)`/g, '`$1`')
-      .replace(/\*\*([^*]+)\*\*/g, '*$1*')
-      .replace(/__([^_]+)__/g, '_$1_');
+    // Step 1: Preserve code blocks (replace with placeholders to avoid modifying their content)
+    const codeBlocks: string[] = [];
+    let formatted = text.replace(/```(?:\w+)?\n?([\s\S]*?)```/g, (match) => {
+      const index = codeBlocks.length;
+      // Strip language identifier for Slack (```typescript → ```)
+      const cleaned = match.replace(/```\w+\n/, '```\n');
+      codeBlocks.push(cleaned);
+      return `\x00CB${index}\x00`;
+    });
+
+    // Step 2: Preserve inline code
+    const inlineCodes: string[] = [];
+    formatted = formatted.replace(/`([^`]+)`/g, (match) => {
+      const index = inlineCodes.length;
+      inlineCodes.push(match);
+      return `\x00IC${index}\x00`;
+    });
+
+    // Step 3: Convert Markdown headings to Slack bold
+    formatted = formatted.replace(/^#{1,6}\s+(.+)$/gm, '*$1*');
+
+    // Step 4: Convert horizontal rules to visual divider
+    formatted = formatted.replace(/^[-*_]{3,}\s*$/gm, '━━━━━━━━━━━━━━━━━━━━');
+
+    // Step 5: Convert Markdown tables to code blocks (before bold conversion)
+    formatted = this.convertMarkdownTables(formatted);
+
+    // Step 6: Convert **bold** and __bold__ to *bold* (Slack bold)
+    formatted = formatted.replace(/\*\*(.+?)\*\*/g, '*$1*');
+    formatted = formatted.replace(/__(.+?)__/g, '*$1*');
+
+    // Step 7: Convert ~~strikethrough~~ to ~strikethrough~
+    formatted = formatted.replace(/~~(.+?)~~/g, '~$1~');
+
+    // Step 8: Convert Markdown links [text](url) to Slack links <url|text>
+    formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<$2|$1>');
+
+    // Step 9: Clean up excessive newlines
+    formatted = formatted.replace(/\n{4,}/g, '\n\n\n');
+
+    // Step 10: Restore inline code
+    formatted = formatted.replace(/\x00IC(\d+)\x00/g, (_, index) => inlineCodes[parseInt(index)]);
+
+    // Step 11: Restore code blocks
+    formatted = formatted.replace(/\x00CB(\d+)\x00/g, (_, index) => codeBlocks[parseInt(index)]);
 
     return formatted;
   }
 
+  private convertMarkdownTables(text: string): string {
+    // Match consecutive lines that form a Markdown table (lines starting and ending with |)
+    return text.replace(
+      /((?:^\|.+\|$\n?){2,})/gm,
+      (tableBlock) => {
+        const lines = tableBlock.trim().split('\n');
+        // Filter out separator rows (e.g., |------|------|)
+        const dataLines = lines.filter(line => !line.match(/^\|[\s\-:|]+\|$/));
+        if (dataLines.length === 0) return tableBlock;
+        return '```\n' + dataLines.join('\n') + '\n```';
+      }
+    );
+  }
+
   setupEventHandlers() {
-    // Handle direct messages
+    // Handle direct messages (including file uploads)
     this.app.message(async ({ message, say }) => {
-      if (message.subtype === undefined && 'user' in message) {
-        this.logger.info('Handling direct message event');
+      this.logger.debug('Raw message event received', {
+        type: (message as any).type,
+        subtype: (message as any).subtype,
+        user: (message as any).user,
+        channel: (message as any).channel,
+        hasFiles: !!(message as any).files,
+        fileCount: (message as any).files?.length || 0,
+        hasText: !!(message as any).text,
+        textPreview: (message as any).text?.substring(0, 100),
+        // Log all top-level keys for unknown event shapes
+        eventKeys: Object.keys(message),
+      });
+
+      if ('user' in message && (message.subtype === undefined || message.subtype === 'file_share')) {
+        this.logger.info('Handling direct message event', {
+          subtype: message.subtype || 'text',
+          hasFiles: !!(message as any).files,
+          fileCount: (message as any).files?.length || 0,
+        });
         await this.handleMessage(message as MessageEvent, say);
+      } else {
+        this.logger.debug('Skipping message event', {
+          reason: !('user' in message) ? 'no user field' : `unhandled subtype: ${(message as any).subtype}`,
+          subtype: (message as any).subtype,
+        });
       }
     });
 
     // Handle app mentions
     this.app.event('app_mention', async ({ event, say }) => {
-      this.logger.info('Handling app mention event');
+      this.logger.debug('Raw app_mention event received', {
+        user: event.user,
+        channel: event.channel,
+        hasFiles: !!(event as any).files,
+        fileCount: (event as any).files?.length || 0,
+        textPreview: event.text?.substring(0, 100),
+        eventKeys: Object.keys(event),
+      });
+
+      this.logger.info('Handling app mention event', {
+        hasFiles: !!(event as any).files,
+        fileCount: (event as any).files?.length || 0,
+      });
       const text = event.text.replace(/<@[^>]+>/g, '').trim();
       await this.handleMessage({
         ...event,
         text,
       } as MessageEvent, say);
-    });
-
-    // Handle file uploads in threads
-    this.app.event('message', async ({ event, say }) => {
-      if (event.subtype === 'file_share' && 'user' in event && event.files) {
-        this.logger.info('Handling file upload event');
-        await this.handleMessage(event as MessageEvent, say);
-      }
     });
 
     // Handle bot being added to channels

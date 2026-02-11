@@ -19,6 +19,8 @@ export const config = {
   dataDirectory: process.env.DATA_DIRECTORY || './data',
   maxConcurrency: parseInt(process.env.MAX_CONCURRENT_QUERIES || '5', 10),
   debug: process.env.DEBUG === 'true' || process.env.NODE_ENV === 'development',
+  logLevel: (process.env.LOG_LEVEL || (process.env.DEBUG === 'true' ? 'debug' : 'info')).toLowerCase() as 'trace' | 'debug' | 'info' | 'warn' | 'error',
+  logFile: process.env.LOG_FILE || '',
 };
 
 export function validateConfig() {

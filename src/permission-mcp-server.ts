@@ -82,6 +82,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           channel: slackContext.channel,
           thread_ts: slackContext.threadTs,
           user: slackContext.user,
+          working_directory: slackContext.workingDirectory,
         }),
       },
     );

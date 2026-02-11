@@ -98,6 +98,7 @@ DEBUG=true
 - `channels:history` - Read channel messages
 - `chat:write` - Send messages
 - `chat:write.public` - Write to public channels
+- `files:read` - Access files shared in conversations
 - `im:history` - Read direct messages
 - `im:read` - Basic DM info
 - `im:write` - Send direct messages

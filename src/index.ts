@@ -50,6 +50,8 @@ async function start() {
       usingVertex: config.claude.useVertex,
       usingAnthropicAPI: !config.claude.useBedrock && !config.claude.useVertex,
       debugMode: config.debug,
+      logLevel: config.logLevel,
+      logFile: config.logFile || '(none)',
       baseDirectory: config.baseDirectory || 'not set',
       maxConcurrency: config.maxConcurrency,
       permissionBridgePort,

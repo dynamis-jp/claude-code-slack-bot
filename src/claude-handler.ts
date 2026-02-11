@@ -5,6 +5,22 @@ import { ConversationSession } from './types.js';
 import { Logger } from './logger.js';
 import { McpManager, McpServerConfig } from './mcp-manager.js';
 
+/**
+ * Tools that are auto-approved without requiring Slack permission prompts.
+ * These are read-only or low-risk tools safe for automated use.
+ * Override with ALLOWED_TOOLS env var (comma-separated).
+ */
+const DEFAULT_SAFE_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'TodoRead',
+];
+
+const SAFE_TOOLS: string[] = process.env.ALLOWED_TOOLS
+  ? process.env.ALLOWED_TOOLS.split(',').map(t => t.trim())
+  : DEFAULT_SAFE_TOOLS;
+
 export class ClaudeHandler {
   private sessions: Map<string, ConversationSession> = new Map();
   private logger = new Logger('ClaudeHandler');
@@ -41,7 +57,7 @@ export class ClaudeHandler {
     session?: ConversationSession,
     abortController?: AbortController,
     workingDirectory?: string,
-    slackContext?: { channel: string; threadTs?: string; user: string }
+    slackContext?: { channel: string; threadTs?: string; user: string; workingDirectory?: string }
   ): AsyncGenerator<SDKMessage, void, unknown> {
     const options: any = {
       outputFormat: 'stream-json',
@@ -83,23 +99,27 @@ export class ClaudeHandler {
       options.mcpServers = mcpServers;
     }
     
+    // Build allowedTools: always include safe read-only tools + MCP tools
+    const allowedTools: string[] = [...SAFE_TOOLS];
+
     if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
       // Allow all MCP tools by default, plus permission prompt tool
       const defaultMcpTools = this.mcpManager.getDefaultAllowedTools();
       if (slackContext) {
         defaultMcpTools.push('mcp__permission-prompt');
       }
-      if (defaultMcpTools.length > 0) {
-        options.allowedTools = defaultMcpTools;
-      }
-      
+      allowedTools.push(...defaultMcpTools);
+
       this.logger.debug('Added MCP configuration to options', {
         serverCount: Object.keys(options.mcpServers).length,
         servers: Object.keys(options.mcpServers),
-        allowedTools: defaultMcpTools,
+        mcpTools: defaultMcpTools,
         hasSlackContext: !!slackContext,
       });
     }
+
+    options.allowedTools = allowedTools;
+    this.logger.debug('Allowed tools configured', { allowedTools });
 
     if (session?.sessionId) {
       options.resume = session.sessionId;
